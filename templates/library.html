@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的书架 · Reader3</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; background: #f4f6f3; color: #26312b; margin: 0; padding: 40px; }
+        .container { max-width: 960px; margin: 0 auto; }
+        h1 { font-size: 28px; font-weight: 600; margin-bottom: 12px; }
+        .intro { color: #647169; font-size: 15px; line-height: 1.7; }
+        .book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 18px; margin-top: 18px; }
+        .book-card { display: flex; flex-direction: column; align-items: flex-start; background: white; padding: 22px; border: 1px solid #dbe2dc; border-radius: 10px; }
+        .book-title { font-size: 18px; font-weight: 600; line-height: 1.55; margin-bottom: 12px; overflow-wrap: anywhere; }
+        .book-meta { color: #647169; font-size: 13px; line-height: 1.7; margin-bottom: 10px; }
+        .book-card .btn { margin-top: auto; }
+        .btn { display: inline-block; background: #2c6251; color: white; text-decoration: none; padding: 8px 15px; border-radius: 7px; font-size: 14px; }
+        .btn:hover { background: #234f41; }
+        * { box-sizing: border-box; }
+        [hidden] { display: none !important; }
+        .import-area { background: white; border: 1px dashed #91a89f; border-radius: 10px; padding: 22px; margin: 24px 0; }
+        .import-area.dragging { background: #edf6f1; border-color: #286456; }
+        .import-area h2 { font-size: 18px; margin: 0 0 8px; }
+        .import-area p { color: #59665e; font-size: 14px; line-height: 1.7; }
+        button { font: inherit; cursor: pointer; }
+        button.btn { border: 0; }
+        button:disabled { opacity: .6; cursor: wait; }
+        .notice { background: #eaf4ed; padding: 14px 18px; border-radius: 8px; line-height: 1.7; }
+        #import-status { min-height: 24px; margin-bottom: 0; }
+        #import-status.error { color: #a53525; }
+        .reading-progress { min-height: 20px; font-size: 13px; color: #657268; margin: 8px 0; }
+        .library-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 12px 16px; margin-top: 32px; }
+        .library-controls label { display: grid; gap: 7px; color: #647169; font-size: 13px; }
+        .search-field { flex: 1; min-width: 180px; display: grid; gap: 7px; }
+        .search-input-wrap { display: flex; gap: 8px; }
+        input[type="search"], select { min-height: 40px; min-width: 0; padding: 9px 12px; border: 1px solid #cdd7cf; border-radius: 7px; background: #fff; color: #26312b; font-family: inherit; font-size: 14px; line-height: 1.4; }
+        input[type="search"] { width: 100%; flex: 1; }
+        #clear-library-search { border: 1px solid #cdd7cf; border-radius: 7px; padding: 6px 10px; color: #2c6251; background: white; white-space: nowrap; font-size: 13px; }
+        #library-result-count { color: #647169; font-size: 13px; margin: 16px 0 0; }
+        #library-no-results { padding: 28px 0; color: #647169; line-height: 1.7; }
+        .footer-note { margin-top: 40px; color: #647169; font-size: 13px; line-height: 1.7; }
+        :focus-visible { outline: 3px solid #bc762e; outline-offset: 3px; }
+        @media(max-width: 550px) { body { padding: 22px 16px; } .book-grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>我的书架</h1><p class="intro">选一章，慢慢读。遇到问题，把原文带给 AI。</p>
+
+        {% if imported %}
+        <p class="notice" role="status">{% if duplicate_import %}《{{ imported.title }}》已经在书架上，没有重复添加。{% else %}已导入《{{ imported.title }}》，可以开始阅读了。{% endif %}</p>
+        {% endif %}
+
+        <section id="import-area" class="import-area" aria-labelledby="import-title">
+            <h2 id="import-title">添加一本书</h2>
+            <p>选择 EPUB，也可以把文件拖到这里。每次一本，最大 50 MB。书籍保存在这台电脑上。</p>
+            <input id="epub-file" type="file" accept=".epub,application/epub+zip" hidden aria-label="选择 EPUB 文件">
+            <button id="choose-epub" class="btn" type="button">选择 EPUB</button>
+            <p id="import-status" role="status" aria-live="polite"></p>
+        </section>
+
+        {% if not books %}
+            <p>书架还是空的。导入第一本 EPUB，就可以开始阅读。</p>
+        {% else %}
+        <div class="library-controls" aria-label="查找书籍">
+            <div class="search-field">
+                <label for="library-search">查找书籍</label>
+                <span class="search-input-wrap">
+                    <input id="library-search" type="search" placeholder="输入书名或作者" autocomplete="off" aria-controls="book-grid" aria-describedby="library-result-count">
+                    <button id="clear-library-search" type="button" hidden>清除</button>
+                </span>
+            </div>
+            <label for="library-sort">排序
+                <select id="library-sort" aria-controls="book-grid">
+                    <option value="recent">最近阅读</option>
+                    <option value="title">书名</option>
+                </select>
+            </label>
+        </div>
+        <p id="library-result-count" role="status" aria-live="polite">共 {{ books | length }} 本</p>
+        <p id="library-no-results" hidden>没有找到匹配的书。试试更短的书名或作者名，或清除搜索。</p>
+        {% endif %}
+
+        <div id="book-grid" class="book-grid">
+            {% for book in books %}
+            <div class="book-card" data-book-title="{{ book.title }}" data-book-author="{{ book.author }}">
+                <div class="book-title">{{ book.title }}</div>
+                <div class="book-meta">
+                    {{ book.author }}<br>
+                    {% if book.logical_chapters %}{{ book.logical_chapters }} 章已定位{% else %}{{ book.chapters }} 个阅读单元{% endif %}
+                </div>
+                <p class="reading-progress"></p>
+                <a href="{{ book.reading_url }}" class="btn" data-reading-link data-book-id="{{ book.id }}">开始阅读</a>
+            </div>
+            {% endfor %}
+        </div>
+    <p class="footer-note">基于 Karpathy 的 Reader3 · 本机使用<br>书籍和阅读位置保存在这台电脑；浏览器与桌面版共用书库。</p>
+    </div>
+    <script src="{{ asset_url('import.js') }}" defer></script>
+    <script src="{{ asset_url('progress.js') }}" defer></script>
+    <script src="{{ asset_url('library.js') }}" defer></script>
+</body>
+</html>

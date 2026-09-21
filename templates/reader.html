@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ book.metadata.title }}</title>
+    <link rel="stylesheet" href="{{ asset_url('reader.css') }}">
+    <script src="{{ asset_url('preferences.js') }}"></script>
+</head>
+<body data-book-id="{{ book_id }}" data-chapter-title="{{ chapter_title }}">
+    <a class="skip-link" href="#reading-start">跳到正文</a>
+    <button id="sidebar-backdrop" class="sidebar-backdrop" aria-label="关闭目录" tabindex="-1" hidden></button>
+
+    <!-- SIDEBAR -->
+    <aside id="sidebar" aria-label="章节目录">
+        <div class="sidebar-top">
+            <a href="/" class="nav-home">← 返回书架</a>
+            <button id="close-sidebar" type="button">关闭目录</button>
+        </div>
+        <div class="nav-header">{{ book.metadata.title }}</div>
+
+        <!-- Recursive Macro for TOC -->
+        {% macro render_toc(items) %}
+            <ul class="toc-list">
+            {% for item in items %}
+                <li class="toc-item">
+                    {% set target_url = toc_url(item) %}
+                    {% if target_url %}
+                    <a href="{{ target_url }}" class="toc-link {% if item.file_href in active_files %}active{% endif %}">
+                        {{ item.title }}
+                    </a>
+                    {% else %}
+                    <span class="toc-link">{{ item.title }}</span>
+                    {% endif %}
+
+                    {% if item.children %}
+                        {{ render_toc(item.children) }}
+                    {% endif %}
+                </li>
+            {% endfor %}
+            </ul>
+        {% endmacro %}
+
+        {{ render_toc(book.toc) }}
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main id="main" tabindex="-1">
+        <div class="toolbar" aria-label="阅读工具">
+            <div class="toolbar-actions">
+                <button id="toggle-sidebar" aria-controls="sidebar" aria-expanded="true">目录</button>
+                <button id="copy-page" class="primary">{{ copy_label }}</button>
+                <button id="copy-selection" disabled>复制选中文字</button>
+                <span id="copy-status" role="status" aria-live="polite"></span>
+            </div>
+            <p class="copy-note"><strong>{{ chapter_title }}</strong> · <span id="char-count"></span><br>{{ boundary_notice }} <span id="image-note"></span><span id="long-note"></span></p>
+            <p id="reading-progress-status" class="copy-note" role="status" aria-live="polite">正在恢复阅读位置…</p>
+            <div class="toolbar-panels">
+                <details id="reading-settings">
+                    <summary>阅读设置</summary>
+                    <div class="settings-grid">
+                        <label for="reading-font-size">正文字号
+                            <select id="reading-font-size">
+                                <option value="18">较小 · 18</option>
+                                <option value="20" selected>适中 · 20</option>
+                                <option value="22">较大 · 22</option>
+                                <option value="24">大 · 24</option>
+                                <option value="28">特大 · 28</option>
+                            </select>
+                        </label>
+                        <label for="reading-line-height">行距
+                            <select id="reading-line-height">
+                                <option value="1.65">紧凑</option>
+                                <option value="1.9" selected>舒适</option>
+                                <option value="2.15">宽松</option>
+                            </select>
+                        </label>
+                        <label for="reading-width">阅读宽度
+                            <select id="reading-width">
+                                <option value="narrow">窄</option>
+                                <option value="balanced" selected>适中</option>
+                                <option value="wide">宽</option>
+                            </select>
+                        </label>
+                        <label for="reading-theme">配色
+                            <select id="reading-theme">
+                                <option value="light" selected>浅色</option>
+                                <option value="warm">暖色</option>
+                                <option value="dark">深色</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="settings-footer">
+                        <button id="reset-reading-settings" type="button">恢复默认</button>
+                        <p id="preferences-status" role="status" aria-live="polite">设置适用于所有书籍，并保存在当前阅读器。</p>
+                    </div>
+                </details>
+                <details id="preview-details">
+                    <summary>查看待复制内容</summary>
+                    <textarea id="copy-preview" aria-label="待复制内容" readonly spellcheck="false"></textarea>
+                </details>
+            </div>
+        </div>
+        <div class="content-container">
+            <article id="reading-start" class="book-content" tabindex="-1" aria-label="正文">
+                {{ rendered_content | safe }}
+            </article>
+
+            <div class="chapter-nav">
+                {% if prev_url %}
+                    <a href="{{ prev_url }}" class="nav-btn">← 上一{{ "章" if is_logical else "单元" }}</a>
+                {% else %}
+                    <span class="nav-btn disabled">← 上一{{ "章" if is_logical else "单元" }}</span>
+                {% endif %}
+
+                <span class="chapter-count">
+                    {{ chapter_index + 1 }} / {{ total_units }}
+                </span>
+
+                {% if next_url %}
+                    <a href="{{ next_url }}" class="nav-btn">下一{{ "章" if is_logical else "单元" }} →</a>
+                {% else %}
+                    <span class="nav-btn disabled">下一{{ "章" if is_logical else "单元" }} →</span>
+                {% endif %}
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const content = document.querySelector('.book-content');
+        const bookTitle = {{ book.metadata.title | tojson }};
+        const authors = {{ book.metadata.authors | join('、') | tojson }};
+        const chapterTitle = {{ chapter_title | tojson }};
+        const preview = document.getElementById('copy-preview');
+        const status = document.getElementById('copy-status');
+        const selectionButton = document.getElementById('copy-selection');
+        let selectedText = '';
+
+        // innerText follows the rendered paragraphs without inserting spaces inside inline emphasis.
+        const pageText = content.innerText.trim();
+        const characterCount = Array.from(pageText.replace(/\s/g, '')).length;
+        document.getElementById('char-count').textContent = `正文 ${characterCount.toLocaleString()} 字符（不计空白）`;
+        if (characterCount > 10000) document.getElementById('long-note').textContent = ' 内容较长；如 AI 提示超限，可先复制选中片段。';
+        const imageCount = content.querySelectorAll('img, svg, math').length;
+        if (imageCount) document.getElementById('image-note').textContent = ' 图片或公式未包含在纯文字中，请另行核对。';
+
+        function makePayload(text, scope) {
+            return `书名：${bookTitle}\n作者：${authors || '未标注'}\n章节：${chapterTitle}\n范围：${scope}\n\n${text}`;
+        }
+        const pagePayload = makePayload(pageText, {{ copy_scope | tojson }});
+        preview.value = pagePayload;
+
+        async function copyText(payload) {
+            preview.value = payload;
+            try {
+                if (window.webkit?.messageHandlers?.readerClipboard) {
+                    await window.webkit.messageHandlers.readerClipboard.postMessage(payload);
+                } else {
+                    await navigator.clipboard.writeText(payload);
+                }
+                status.textContent = '已复制，可粘贴到 AI 对话';
+            } catch (error) {
+                document.getElementById('preview-details').open = true;
+                preview.focus();
+                preview.select();
+                status.textContent = '自动复制未成功，请在下方按 ⌘C 或 Ctrl+C';
+            }
+        }
+        document.getElementById('copy-page').addEventListener('click', () => copyText(pagePayload));
+        selectionButton.addEventListener('click', () => {
+            if (selectedText) copyText(makePayload(selectedText, '选中片段（非完整章节）'));
+        });
+        document.addEventListener('selectionchange', () => {
+            const selection = window.getSelection();
+            // Ignore focus changes in the toolbar so clicking Copy does not lose the selection.
+            if (selection && !selection.isCollapsed && content.contains(selection.anchorNode) && content.contains(selection.focusNode)) {
+                selectedText = selection.toString().trim();
+                selectionButton.disabled = !selectedText;
+                preview.value = selectedText ? makePayload(selectedText, '选中片段（非完整章节）') : pagePayload;
+            } else if (!document.querySelector('.toolbar').contains(document.activeElement)) {
+                selectedText = '';
+                selectionButton.disabled = true;
+                preview.value = pagePayload;
+            }
+        });
+        const sidebarButton = document.getElementById('toggle-sidebar');
+        const sidebar = document.getElementById('sidebar');
+        const backdrop = document.getElementById('sidebar-backdrop');
+        const closeSidebarButton = document.getElementById('close-sidebar');
+        const narrow = window.matchMedia('(max-width: 880px)');
+        function updateSidebarState() {
+            const drawerOpen = narrow.matches && document.body.classList.contains('sidebar-open');
+            const visible = narrow.matches ? drawerOpen : !document.body.classList.contains('sidebar-hidden');
+            sidebarButton.setAttribute('aria-expanded', String(visible));
+            sidebar.inert = !visible;
+            document.getElementById('main').inert = drawerOpen;
+            backdrop.hidden = !drawerOpen;
+            if (drawerOpen) {
+                sidebar.setAttribute('role', 'dialog');
+                sidebar.setAttribute('aria-modal', 'true');
+            } else {
+                sidebar.removeAttribute('role');
+                sidebar.removeAttribute('aria-modal');
+            }
+        }
+        function closeSidebar(returnFocus = true) {
+            document.body.classList.remove('sidebar-open');
+            updateSidebarState();
+            if (returnFocus) sidebarButton.focus();
+        }
+        sidebarButton.addEventListener('click', () => {
+            document.body.classList.toggle(narrow.matches ? 'sidebar-open' : 'sidebar-hidden');
+            updateSidebarState();
+            if (narrow.matches && document.body.classList.contains('sidebar-open')) closeSidebarButton.focus();
+        });
+        closeSidebarButton.addEventListener('click', () => closeSidebar());
+        backdrop.addEventListener('click', () => closeSidebar());
+        sidebar.addEventListener('click', event => {
+            if (narrow.matches && event.target.closest('a')) closeSidebar(false);
+        });
+        document.addEventListener('keydown', event => {
+            if (!narrow.matches || !document.body.classList.contains('sidebar-open')) return;
+            if (event.key === 'Escape') {
+                closeSidebar();
+                event.preventDefault();
+                return;
+            }
+            if (event.key === 'Tab') {
+                const focusable = Array.from(sidebar.querySelectorAll('a[href], button:not(:disabled)'));
+                const first = focusable[0], last = focusable[focusable.length - 1];
+                if (event.shiftKey && (document.activeElement === first || !sidebar.contains(document.activeElement))) {
+                    last?.focus();
+                    event.preventDefault();
+                } else if (!event.shiftKey && (document.activeElement === last || !sidebar.contains(document.activeElement))) {
+                    first?.focus();
+                    event.preventDefault();
+                }
+            }
+        });
+        narrow.addEventListener('change', () => {
+            if (!narrow.matches) document.body.classList.remove('sidebar-open');
+            updateSidebarState();
+        });
+        updateSidebarState();
+        const main = document.getElementById('main');
+        const toolbar = document.querySelector('.toolbar');
+        const updateToolbarHeight = () => main.style.setProperty('--toolbar-height', `${toolbar.getBoundingClientRect().height}px`);
+        new ResizeObserver(updateToolbarHeight).observe(toolbar);
+        updateToolbarHeight();
+        function alignHashTarget() {
+            if (!location.hash) return;
+            requestAnimationFrame(() => {
+                // Measure after hash/style changes so the sticky toolbar cannot cover the target.
+                updateToolbarHeight();
+                try {
+                    const target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+                    if (target && content.contains(target)) target.scrollIntoView({block: 'start', behavior: 'instant'});
+                } catch {}
+            });
+        }
+        window.addEventListener('load', alignHashTarget);
+        window.addEventListener('hashchange', alignHashTarget);
+    </script>
+    <script src="{{ asset_url('progress.js') }}" defer></script>
+</body>
+</html>
